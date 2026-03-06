@@ -35,6 +35,7 @@
 html {
   scroll-behavior: smooth;
   font-size: 16px;
+  overflow-x: hidden;
 }
 
 body {
@@ -42,11 +43,16 @@ body {
   background: var(--ivory);
   color: var(--charcoal);
   overflow-x: hidden;
+  max-width: 100vw;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
 }
 
-#root { min-height: 100vh; }
+#root { 
+  min-height: 100vh; 
+  overflow-x: hidden;
+  max-width: 100vw;
+}
 
 ::selection { background: var(--gold); color: var(--black); }
 
@@ -634,6 +640,7 @@ textarea.form-input { resize: vertical; min-height: 120px; }
   .team-grid  { grid-template-columns: repeat(2,1fr); }
   .footer-top { grid-template-columns: 1fr 1fr; }
   .dash-cards { grid-template-columns: repeat(2,1fr); }
+  .container { max-width: 100%; }
 }
 
 /* Mobile — 900px */
@@ -648,8 +655,8 @@ textarea.form-input { resize: vertical; min-height: 120px; }
   .prop-panel { position: static; }
   .auth-page  { grid-template-columns: 1fr; }
   .auth-visual{ display: none; }
-  .dash-layout { grid-template-columns: 1fr; }
-  .dash-sidebar{ display: none; }
+  .dash-layout { grid-template-columns: 1fr; width: 100%; }
+  .dash-sidebar{ display: none; width: 100%; }
   .dash-cards { grid-template-columns: repeat(2,1fr); }
   .pricing-grid { grid-template-columns: 1fr; }
   .about-grid { gap: 40px; }
@@ -663,35 +670,41 @@ textarea.form-input { resize: vertical; min-height: 120px; }
 
 /* Small Mobile — 640px */
 @media (max-width: 640px) {
-  .section    { padding: 64px 0; }
-  .properties-grid { grid-template-columns: 1fr; }
-  .blog-grid  { grid-template-columns: 1fr; }
-  .stats-grid { grid-template-columns: 1fr 1fr; }
-  .steps-grid { grid-template-columns: 1fr; }
-  .why-grid   { grid-template-columns: 1fr; }
-  .dash-cards { grid-template-columns: 1fr 1fr; }
-  .footer-top { grid-template-columns: 1fr 1fr; }
-  .form-row   { grid-template-columns: 1fr; }
-  .team-grid  { grid-template-columns: 1fr 1fr; }
-  .kyc-steps  { flex-direction: column; }
-  .hero-trust { gap: 12px; }
-  .testi-grid { grid-template-columns: 1fr; }
-  .filters-bar{ flex-direction: column; }
-  .footer-bottom { flex-direction: column; align-items: flex-start; gap: 16px; }
-  .dash-main  { padding: 24px 16px; }
-  .contact-grid { gap: 40px; }
+  .section    { padding: 64px 0; width: 100%; overflow-x: hidden; }
+  .properties-grid { grid-template-columns: 1fr; width: 100%; }
+  .blog-grid  { grid-template-columns: 1fr; width: 100%; }
+  .stats-grid { grid-template-columns: 1fr 1fr; width: 100%; }
+  .steps-grid { grid-template-columns: 1fr; width: 100%; }
+  .why-grid   { grid-template-columns: 1fr; width: 100%; }
+  .dash-cards { grid-template-columns: 1fr 1fr; width: 100%; }
+  .footer-top { grid-template-columns: 1fr 1fr; width: 100%; }
+  .form-row   { grid-template-columns: 1fr; width: 100%; }
+  .team-grid  { grid-template-columns: 1fr 2fr; width: 100%; }
+  .kyc-steps  { flex-direction: column; width: 100%; }
+  .hero-trust { gap: 12px; width: 100%; }
+  .testi-grid { grid-template-columns: 1fr; width: 100%; }
+  .filters-bar{ flex-direction: column; width: 100%; }
+  .footer-bottom { flex-direction: column; align-items: flex-start; gap: 16px; width: 100%; }
+  .dash-main  { padding: 24px 16px; width: 100%; overflow-x: hidden; }
+  .contact-grid { gap: 40px; width: 100%; }
+  .container { padding: 0 16px; width: 100%; }
+  
+  /* Tables horizontal scroll fix */
+  .data-table { display: block; overflow-x: auto; -webkit-overflow-scrolling: touch; }
+  .data-table th, .data-table td { white-space: nowrap; }
   
   /* Admin Dashboard Mobile */
-  .dash-layout { grid-template-columns: 1fr; }
-  .dash-sidebar { display: none; }
+  .dash-layout { grid-template-columns: 1fr; width: 100%; max-width: 100vw; }
+  .dash-sidebar { display: none; width: 100%; }
   .dash-sidebar.mobile-open { display: block; position: fixed; left: 0; top: 0; bottom: 0; width: 280px; z-index: 1001; }
 }
 
 /* Admin Dashboard Tablet */
 @media (max-width: 1024px) {
-  .dash-layout { grid-template-columns: 200px 1fr; }
-  .dash-sidebar { width: 200px; }
-  .dash-cards { grid-template-columns: repeat(2, 1fr); }
+  .dash-layout { grid-template-columns: 180px 1fr; width: 100%; max-width: 100vw; }
+  .dash-sidebar { width: 180px; }
+  .dash-cards { grid-template-columns: repeat(2, 1fr); width: 100%; }
+  .dash-main { width: 100%; overflow-x: hidden; }
 }
 
 /* Floating Chat Button */
