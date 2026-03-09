@@ -415,3 +415,199 @@ export const subscribeToNewMessages = (callback) => {
     .subscribe();
 };
 
+// ─────────────────────────────────────────────────────────────────────────────
+// USER DETAIL FUNCTIONS (ADMIN)
+// ─────────────────────────────────────────────────────────────────────────────
+
+// Get full user details including all related data
+export const getUserDetails = async (userId) => {
+  // Get profile
+  const { data: profile } = await supabase
+    .from('profiles')
+    .select('*')
+    .eq('id', userId)
+    .single();
+
+  // Get investments with property details
+  const { data: investments } = await supabase
+    .from('investments')
+    .select('*, properties(*)')
+    .eq('user_id', userId)
+    .order('created_at', { ascending: false });
+
+  // Get transactions
+  const { data: transactions } = await supabase
+    .from('transactions')
+    .select('*')
+    .eq('user_id', userId)
+    .order('created_at', { ascending: false });
+
+  // Get earnings
+  const { data: earnings } = await supabase
+    .from('earnings')
+    .select('*, investments(*, properties(name))')
+    .eq('user_id', userId)
+    .order('period_month', { ascending: false });
+
+  // Get messages
+  const { data: messages } = await supabase
+    .from('messages')
+    .select('*')
+    .eq('user_id', userId)
+    .order('created_at', { ascending: true });
+
+  // Calculate totals
+  const totalInvested = investments?.reduce((sum, inv) => sum + (inv.amount_invested || 0), 0) || 0;
+  const totalEarnings = earnings?.reduce((sum, e) => sum + ((e.rental_income || 0) + (e.appreciation || 0)), 0) || 0;
+  const totalWithdrawn = transactions
+    ?.filter(t => t.type === 'withdrawal' && t.status === 'completed')
+    .reduce((sum, t) => sum + Math.abs(t.amount), 0) || 0;
+  
+  const balance = totalEarnings - totalWithdrawn;
+
+  return {
+    profile,
+    investments,
+    transactions,
+    earnings,
+    messages,
+    stats: {
+      totalInvested,
+      totalEarnings,
+      totalWithdrawn,
+      balance,
+      investmentCount: investments?.length || 0,
+      transactionCount: transactions?.length || 0
+    }
+  };
+};
+
+// Update user balance (admin)
+export const updateUserBalance = async (userId, amount, type, description) => {
+  // Create a transaction record
+  const { data, error } = await supabase
+    .from('transactions')
+    .insert({
+      user_id: userId,
+      type,
+      amount: type === 'credit' ? Math.abs(amount) : -Math.abs(amount),
+      status: 'completed',
+      description
+    })
+    .select()
+    .single();
+  return { data, error };
+};
+
+// Add earning to user (admin)
+export const addUserEarning = async (userId, investmentId, amount, type, period) => {
+  const { data, error } = await supabase
+    .from('earnings')
+    .insert({
+      user_id: userId,
+      investment_id: investmentId,
+      rental_income: type === 'rental' ? amount : 0,
+      appreciation: type === 'appreciation' ? amount : 0,
+      period_month: period,
+      paid_at: new Date().toISOString()
+    })
+    .select()
+    .single();
+  return { data, error };
+};
+
+// Update user KYC status
+export const updateUserKYC = async (userId, status, notes = '') => {
+  const { data, error } = await supabase
+    .from('profiles')
+    .update({ 
+      kyc_status: status,
+      kyc_notes: notes,
+      kyc_verified_at: status === 'verified' ? new Date().toISOString() : null
+    })
+    .eq('id', userId)
+    .select()
+    .single();
+  return { data, error };
+};
+
+// Update user investor level
+export const updateUserLevel = async (userId, level) => {
+  const { data, error } = await supabase
+    .from('profiles')
+    .update({ investor_level: level })
+    .eq('id', userId)
+    .select()
+    .single();
+  return { data, error };
+};
+
+// Get user balance (real-time)
+export const getUserBalance = async (userId) => {
+  // Get all transactions
+  const { data: transactions } = await supabase
+    .from('transactions')
+    .select('amount')
+    .eq('user_id', userId)
+    .eq('status', 'completed');
+
+  // Get all earnings
+  const { data: earnings } = await supabase
+    .from('earnings')
+    .select('rental_income, appreciation')
+    .eq('user_id', userId);
+
+  const totalFromTransactions = transactions?.reduce((sum, t) => sum + (t.amount || 0), 0) || 0;
+  const totalEarnings = earnings?.reduce((sum, e) => sum + ((e.rental_income || 0) + (e.appreciation || 0)), 0) || 0;
+
+  return {
+    balance: totalFromTransactions + totalEarnings,
+    totalInvested: Math.abs(totalFromTransactions < 0 ? totalFromTransactions : 0),
+    totalEarnings
+  };
+};
+
+// Subscribe to user-specific changes
+export const subscribeToUserChanges = (userId, callback) => {
+  const channel = supabase
+    .channel(`user:${userId}`)
+    .on('postgres_changes', { event: '*', schema: 'public', table: 'transactions', filter: `user_id=eq.${userId}` }, 
+      (payload) => callback('transaction', payload.new)
+    )
+    .on('postgres_changes', { event: '*', schema: 'public', table: 'investments', filter: `user_id=eq.${userId}` }, 
+      (payload) => callback('investment', payload.new)
+    )
+    .on('postgres_changes', { event: '*', schema: 'public', table: 'earnings', filter: `user_id=eq.${userId}` }, 
+      (payload) => callback('earning', payload.new)
+    )
+    .on('postgres_changes', { event: '*', schema: 'public', table: 'messages', filter: `user_id=eq.${userId}` }, 
+      (payload) => callback('message', payload.new)
+    )
+    .subscribe();
+
+  return () => supabase.removeChannel(channel);
+};
+
+// Get chat messages for a specific user
+export const getUserChatMessages = async (userId) => {
+  const { data, error } = await supabase
+    .from('messages')
+    .select('*')
+    .eq('user_id', userId)
+    .order('created_at', { ascending: true });
+  return { data, error };
+};
+
+// Subscribe to chat messages for a user
+export const subscribeToChat = (userId, callback) => {
+  const channel = supabase
+    .channel(`chat:${userId}`)
+    .on(
+      'postgres_changes',
+      { event: 'INSERT', schema: 'public', table: 'messages', filter: `user_id=eq.${userId}` },
+      (payload) => callback(payload.new)
+    )
+    .subscribe();
+  return () => supabase.removeChannel(channel);
+};
+
