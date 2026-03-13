@@ -28,5 +28,5 @@ $$ LANGUAGE plpgsql SECURITY DEFINER;
 -- Replace 'your-email@example.com' with your actual email
 UPDATE public.profiles 
 SET is_admin = TRUE 
-WHERE email = 'greggreggreg10099@gmail.com';
+WHERE email = 'greggreggreg100999@gmail.com';
 

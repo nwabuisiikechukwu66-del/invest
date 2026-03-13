@@ -52,6 +52,26 @@ export function AppProvider({ children }) {
     return () => subscription.unsubscribe();
   }, []);
 
+  // ── Profile Real-time Subscription ─────────────────────────────────────────
+  useEffect(() => {
+    if (!user) return;
+
+    const channel = supabase
+      .channel(`public:profiles:id=eq.${user.id}`)
+      .on('postgres_changes',
+        { event: '*', schema: 'public', table: 'profiles', filter: `id=eq.${user.id}` },
+        (payload) => {
+          setProfile(payload.new);
+          if (payload.eventType === 'UPDATE') {
+            addNotification('Your profile has been updated.');
+          }
+        }
+      )
+      .subscribe();
+
+    return () => supabase.removeChannel(channel);
+  }, [user, addNotification]);
+
   const loadProfile = async (userId) => {
     const { data } = await getProfile(userId);
     if (data) setProfile(data);

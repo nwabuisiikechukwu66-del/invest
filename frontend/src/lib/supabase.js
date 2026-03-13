@@ -224,6 +224,15 @@ export const updateInvestment = async (id, updates) => {
   return { data, error };
 };
 
+// Delete investment (admin)
+export const deleteInvestment = async (id) => {
+  const { error } = await supabase
+    .from('investments')
+    .delete()
+    .eq('id', id);
+  return { error };
+};
+
 // Mark investment as paid
 export const markInvestmentAsPaid = async (investmentId) => {
   const { data, error } = await supabase
@@ -304,6 +313,15 @@ export const updateTransaction = async (id, updates) => {
     .select()
     .single();
   return { data, error };
+};
+
+// Delete transaction (admin)
+export const deleteTransaction = async (id) => {
+  const { error } = await supabase
+    .from('transactions')
+    .delete()
+    .eq('id', id);
+  return { error };
 };
 
 // Get all messages for admin (grouped by user)
@@ -415,6 +433,18 @@ export const subscribeToNewMessages = (callback) => {
     .subscribe();
 };
 
+// Subscribe to profile changes (admin - for realtime users tab)
+export const subscribeToProfiles = (callback) => {
+  return supabase
+    .channel('admin:profiles')
+    .on(
+      'postgres_changes',
+      { event: '*', schema: 'public', table: 'profiles' },
+      (payload) => callback(payload)
+    )
+    .subscribe();
+};
+
 // ─────────────────────────────────────────────────────────────────────────────
 // USER DETAIL FUNCTIONS (ADMIN)
 // ─────────────────────────────────────────────────────────────────────────────
@@ -516,6 +546,26 @@ export const addUserEarning = async (userId, investmentId, amount, type, period)
   return { data, error };
 };
 
+// Update earning (admin)
+export const updateEarning = async (id, updates) => {
+  const { data, error } = await supabase
+    .from('earnings')
+    .update(updates)
+    .eq('id', id)
+    .select()
+    .single();
+  return { data, error };
+};
+
+// Delete earning (admin)
+export const deleteEarning = async (id) => {
+  const { error } = await supabase
+    .from('earnings')
+    .delete()
+    .eq('id', id);
+  return { error };
+};
+
 // Update user KYC status
 export const updateUserKYC = async (userId, status, notes = '') => {
   const { data, error } = await supabase
@@ -571,6 +621,9 @@ export const getUserBalance = async (userId) => {
 export const subscribeToUserChanges = (userId, callback) => {
   const channel = supabase
     .channel(`user:${userId}`)
+    .on('postgres_changes', { event: '*', schema: 'public', table: 'profiles', filter: `id=eq.${userId}` }, 
+      (payload) => callback('profile', payload.new)
+    )
     .on('postgres_changes', { event: '*', schema: 'public', table: 'transactions', filter: `user_id=eq.${userId}` }, 
       (payload) => callback('transaction', payload.new)
     )

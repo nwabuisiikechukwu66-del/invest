@@ -14,13 +14,18 @@ import {
   createProperty,
   deleteProperty,
   updateTransaction,
+  deleteTransaction,
   sendChatMessage,
   getProperties,
   getUserDetails,
   updateUserBalance,
   addUserEarning,
+  updateEarning,
+  deleteEarning,
+  deleteInvestment,
   updateUserKYC,
   getUserChatMessages,
+  subscribeToProfiles,
   supabase
 } from '@lib/supabase';
 import { fmtCurrency } from '@utils/format';
@@ -45,24 +50,30 @@ export default function AdminDashboard() {
   const [properties, setProperties] = useState([]);
   const [transactions, setTransactions] = useState([]);
   const [loading, setLoading] = useState(true);
-  
+
   // User detail state
   const [selectedUser, setSelectedUser] = useState(null);
   const [userDetails, setUserDetails] = useState(null);
   const [userLoading, setUserLoading] = useState(false);
   const [chatMessages, setChatMessages] = useState([]);
   const [chatInput, setChatInput] = useState('');
-  
+
   // Property form state
   const [propertyForm, setPropertyForm] = useState({
     name: '', location: '', country: '', type: '', description: '',
     roi: '', min_investment: '', target_amount: '', rental_yield: '',
     bedrooms: '', sqft: '', status: 'active'
   });
-  
+
   // Edit user state
   const [editingUser, setEditingUser] = useState(null);
-  
+  const [editUserForm, setEditUserForm] = useState(null);
+
+  // Edit forms for tx/inv/earn
+  const [editingTx, setEditingTx] = useState(null);
+  const [editingInv, setEditingInv] = useState(null);
+  const [editingEarn, setEditingEarn] = useState(null);
+
   // Add funds/earnings modal
   const [fundsModal, setFundsModal] = useState({ show: false, type: '', userId: null });
 
@@ -99,12 +110,24 @@ export default function AdminDashboard() {
     loadData().finally(() => setLoading(false));
   }, [loadData]);
 
+  // Subscribe to profile changes for real-time users list
+  useEffect(() => {
+    if (tab === 'users' && profile?.is_admin) {
+      const channel = subscribeToProfiles(() => {
+        if (!selectedUser) loadData(); // Reload users list if not looking at detail
+      });
+      return () => {
+        if (channel) supabase.removeChannel(channel);
+      };
+    }
+  }, [tab, profile, selectedUser, loadData]);
+
   // Load user details when a user is selected
   const loadUserDetails = useCallback(async (userId) => {
     setUserLoading(true);
     const details = await getUserDetails(userId);
     setUserDetails(details);
-    
+
     // Load chat messages
     const { data: messages } = await getUserChatMessages(userId);
     setChatMessages(messages || []);
@@ -115,23 +138,23 @@ export default function AdminDashboard() {
   useEffect(() => {
     if (selectedUser) {
       loadUserDetails(selectedUser.id);
-      
+
       // Subscribe to real-time changes
       const channel = supabase
         .channel(`admin-user:${selectedUser.id}`)
-        .on('postgres_changes', 
+        .on('postgres_changes',
           { event: 'INSERT', schema: 'public', table: 'transactions', filter: `user_id=eq.${selectedUser.id}` },
           () => loadUserDetails(selectedUser.id)
         )
-        .on('postgres_changes', 
+        .on('postgres_changes',
           { event: 'INSERT', schema: 'public', table: 'investments', filter: `user_id=eq.${selectedUser.id}` },
           () => loadUserDetails(selectedUser.id)
         )
-        .on('postgres_changes', 
+        .on('postgres_changes',
           { event: 'INSERT', schema: 'public', table: 'earnings', filter: `user_id=eq.${selectedUser.id}` },
           () => loadUserDetails(selectedUser.id)
         )
-        .on('postgres_changes', 
+        .on('postgres_changes',
           { event: 'INSERT', schema: 'public', table: 'messages', filter: `user_id=eq.${selectedUser.id}` },
           async () => {
             const { data } = await getUserChatMessages(selectedUser.id);
@@ -139,7 +162,7 @@ export default function AdminDashboard() {
           }
         )
         .subscribe();
-        
+
       return () => supabase.removeChannel(channel);
     }
   }, [selectedUser, loadUserDetails]);
@@ -183,7 +206,7 @@ export default function AdminDashboard() {
       sqft: propertyForm.sqft ? parseInt(propertyForm.sqft) : null,
       status: propertyForm.status
     });
-    
+
     if (error) {
       addNotification('Error creating property: ' + error.message);
     } else {
@@ -198,10 +221,21 @@ export default function AdminDashboard() {
   };
 
   // Handle updating user
-  const handleUpdateUser = async (userId, updates) => {
-    await updateUserProfile(userId, updates);
+  const handleUpdateUser = async (e) => {
+    e.preventDefault();
+    await updateUserProfile(editingUser.id, {
+      first_name: editUserForm.first_name,
+      last_name: editUserForm.last_name,
+      country: editUserForm.country,
+      phone: editUserForm.phone,
+      bank_account: editUserForm.bank_account,
+      investor_level: editUserForm.investor_level,
+      kyc_status: editUserForm.kyc_status,
+      is_admin: editUserForm.is_admin === 'true'
+    });
     addNotification('User updated successfully');
     setEditingUser(null);
+    setEditUserForm(null);
     loadData();
     if (selectedUser) loadUserDetails(selectedUser.id);
   };
@@ -218,7 +252,7 @@ export default function AdminDashboard() {
     const amount = parseFloat(document.getElementById('fund-amount').value);
     const description = document.getElementById('fund-desc').value;
     const type = fundsModal.type;
-    
+
     if (!amount || amount <= 0) {
       addNotification('Please enter a valid amount');
       return;
@@ -228,14 +262,14 @@ export default function AdminDashboard() {
       const investmentId = document.getElementById('fund-investment').value;
       const earningType = document.getElementById('earning-type').value;
       const period = document.getElementById('earning-period').value || new Date().toISOString().slice(0, 7);
-      
+
       await addUserEarning(fundsModal.userId, investmentId, amount, earningType, period);
       addNotification('Earning added to user');
     } else {
       await updateUserBalance(fundsModal.userId, amount, type, description);
       addNotification(type === 'credit' ? 'Funds added to user' : 'Funds deducted from user');
     }
-    
+
     setFundsModal({ show: false, type: '', userId: null });
     if (selectedUser) loadUserDetails(selectedUser.id);
   };
@@ -244,8 +278,40 @@ export default function AdminDashboard() {
   const handleUpdateTransaction = async (id, updates) => {
     await updateTransaction(id, updates);
     addNotification('Transaction updated');
+    setEditingTx(null);
     loadData();
     if (selectedUser) loadUserDetails(selectedUser.id);
+  };
+
+  const handleDeleteTransaction = async (id) => {
+    if (confirm('Are you sure you want to delete this transaction?')) {
+      await deleteTransaction(id);
+      addNotification('Transaction deleted');
+      if (selectedUser) loadUserDetails(selectedUser.id);
+    }
+  };
+
+  const handleDeleteInvestment = async (id) => {
+    if (confirm('Are you sure you want to delete this investment?')) {
+      await deleteInvestment(id);
+      addNotification('Investment deleted');
+      if (selectedUser) loadUserDetails(selectedUser.id);
+    }
+  };
+
+  const handleUpdateEarning = async (id, updates) => {
+    await updateEarning(id, updates);
+    addNotification('Earning updated');
+    setEditingEarn(null);
+    if (selectedUser) loadUserDetails(selectedUser.id);
+  };
+
+  const handleDeleteEarning = async (id) => {
+    if (confirm('Are you sure you want to delete this earning?')) {
+      await deleteEarning(id);
+      addNotification('Earning deleted');
+      if (selectedUser) loadUserDetails(selectedUser.id);
+    }
   };
 
   // Handle deleting property
@@ -283,7 +349,7 @@ export default function AdminDashboard() {
         </button>
         <span style={{ color: 'var(--ivory)', fontSize: 14 }}>Admin Panel</span>
       </div>
-      
+
       {/* Sidebar */}
       <aside className={`dash-sidebar ${sidebarOpen ? 'mobile-open' : ''}`}>
         <div className="dash-user">
@@ -296,7 +362,7 @@ export default function AdminDashboard() {
           <div
             key={item.key}
             className={`dash-nav-item${tab === item.key ? ' active' : ''}`}
-onClick={() => { setTab(item.key); setSelectedUser(null); setSidebarOpen(false); }}
+            onClick={() => { setTab(item.key); setSelectedUser(null); setSidebarOpen(false); }}
           >
             <span style={{ fontSize: 14 }}>{item.icon}</span>
             {item.label}
@@ -418,7 +484,15 @@ onClick={() => { setTab(item.key); setSelectedUser(null); setSidebarOpen(false);
                           <button
                             className="btn btn-sm"
                             style={{ padding: '6px 12px', fontSize: 11 }}
-                            onClick={() => setEditingUser(u)}
+                            onClick={() => {
+                              setEditingUser(u);
+                              setEditUserForm({
+                                first_name: u.first_name || '', last_name: u.last_name || '',
+                                phone: u.phone || '', country: u.country || '',
+                                bank_account: u.bank_account || '', investor_level: u.investor_level || 'new',
+                                kyc_status: u.kyc_status || 'pending', is_admin: u.is_admin || false
+                              });
+                            }}
                           >
                             Edit
                           </button>
@@ -430,13 +504,77 @@ onClick={() => { setTab(item.key); setSelectedUser(null); setSidebarOpen(false);
               </div>
             )}
 
+            {/* Edit User Modal */}
+            {editingUser && editUserForm && (
+              <div className="dash-modal" style={{
+                position: 'fixed', top: 0, left: 0, right: 0, bottom: 0,
+                background: 'rgba(0,0,0,0.8)', zIndex: 9999, display: 'flex',
+                alignItems: 'center', justifyContent: 'center', padding: 24
+              }}>
+                <div style={{ background: 'var(--white)', padding: 32, width: '100%', maxWidth: 500, maxHeight: '90vh', overflow: 'auto' }}>
+                  <h3 style={{ marginBottom: 24 }}>Edit User: {editingUser.first_name} {editingUser.last_name}</h3>
+                  <form onSubmit={handleUpdateUser} style={{ display: 'grid', gap: 16 }}>
+                    <div className="form-group">
+                      <label className="form-label">First Name</label>
+                      <input className="form-input" value={editUserForm.first_name} onChange={e => setEditUserForm({ ...editUserForm, first_name: e.target.value })} required />
+                    </div>
+                    <div className="form-group">
+                      <label className="form-label">Last Name</label>
+                      <input className="form-input" value={editUserForm.last_name} onChange={e => setEditUserForm({ ...editUserForm, last_name: e.target.value })} required />
+                    </div>
+                    <div className="form-group">
+                      <label className="form-label">Phone</label>
+                      <input className="form-input" value={editUserForm.phone || ''} onChange={e => setEditUserForm({ ...editUserForm, phone: e.target.value })} />
+                    </div>
+                    <div className="form-group">
+                      <label className="form-label">Country</label>
+                      <input className="form-input" value={editUserForm.country || ''} onChange={e => setEditUserForm({ ...editUserForm, country: e.target.value })} />
+                    </div>
+                    <div className="form-group">
+                      <label className="form-label">Bank Account</label>
+                      <input className="form-input" value={editUserForm.bank_account || ''} onChange={e => setEditUserForm({ ...editUserForm, bank_account: e.target.value })} />
+                    </div>
+                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 }}>
+                      <div className="form-group">
+                        <label className="form-label">Investor Level</label>
+                        <select className="form-select" value={editUserForm.investor_level} onChange={e => setEditUserForm({ ...editUserForm, investor_level: e.target.value })}>
+                          <option value="new">New</option>
+                          <option value="active">Active</option>
+                          <option value="premium">Premium</option>
+                        </select>
+                      </div>
+                      <div className="form-group">
+                        <label className="form-label">KYC Status</label>
+                        <select className="form-select" value={editUserForm.kyc_status} onChange={e => setEditUserForm({ ...editUserForm, kyc_status: e.target.value })}>
+                          <option value="pending">Pending</option>
+                          <option value="submitted">Submitted</option>
+                          <option value="verified">Verified</option>
+                          <option value="rejected">Rejected</option>
+                        </select>
+                      </div>
+                    </div>
+                    <div className="form-group">
+                      <label className="form-label">Is Admin?</label>
+                      <select className="form-select" value={editUserForm.is_admin ? 'true' : 'false'} onChange={e => setEditUserForm({ ...editUserForm, is_admin: e.target.value })}>
+                        <option value="false">No</option>
+                        <option value="true">Yes</option>
+                      </select>
+                    </div>
+                    <div style={{ display: 'flex', gap: 12, marginTop: 8 }}>
+                      <button type="button" className="btn btn-outline-dark" onClick={() => { setEditingUser(null); setEditUserForm(null); }}>Cancel</button>
+                      <button type="submit" className="btn btn-gold" style={{ flex: 1 }}>Save Changes</button>
+                    </div>
+                  </form>
+                </div>
+              </div>
+            )}
             {/* USER DETAIL VIEW */}
             {tab === 'users' && selectedUser && userDetails && (
               <div>
                 <div className="dash-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
                   <div>
-                    <button 
-                      className="btn btn-sm" 
+                    <button
+                      className="btn btn-sm"
                       style={{ marginBottom: 16 }}
                       onClick={() => { setSelectedUser(null); setChatMessages([]); }}
                     >
@@ -450,13 +588,13 @@ onClick={() => { setTab(item.key); setSelectedUser(null); setSidebarOpen(false);
                     </p>
                   </div>
                   <div style={{ display: 'flex', gap: 8 }}>
-                    <button 
+                    <button
                       className="btn btn-gold btn-sm"
                       onClick={() => setFundsModal({ show: true, type: 'credit', userId: selectedUser.id })}
                     >
                       Add Funds
                     </button>
-                    <button 
+                    <button
                       className="btn btn-sm"
                       onClick={() => setFundsModal({ show: true, type: 'earning', userId: selectedUser.id })}
                     >
@@ -488,7 +626,7 @@ onClick={() => { setTab(item.key); setSelectedUser(null); setSidebarOpen(false);
                 </div>
 
                 {/* User Info & Actions */}
-                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 24, marginBottom: 32 }}>
+                <div className="admin-user-details-grid" style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(300px, 1fr))', gap: 24, marginBottom: 32 }}>
                   {/* Profile Info */}
                   <div style={{ background: 'var(--white)', border: '1px solid var(--border-subtle)', padding: 24 }}>
                     <h4 style={{ marginBottom: 16 }}>Profile Information</h4>
@@ -497,9 +635,9 @@ onClick={() => { setTab(item.key); setSelectedUser(null); setSidebarOpen(false);
                       <div><strong>Phone:</strong> {userDetails.profile?.phone || 'Not set'}</div>
                       <div><strong>Country:</strong> {userDetails.profile?.country || 'Not set'}</div>
                       <div><strong>Bank Account:</strong> {userDetails.profile?.bank_account || 'Not set'}</div>
-                      <div><strong>Investor Level:</strong> 
-                        <select 
-                          className="form-select" 
+                      <div><strong>Investor Level:</strong>
+                        <select
+                          className="form-select"
                           style={{ marginLeft: 8, width: 'auto', display: 'inline-block', padding: '4px 8px' }}
                           defaultValue={userDetails.profile?.investor_level}
                           onChange={(e) => updateUserProfile(selectedUser.id, { investor_level: e.target.value })}
@@ -509,9 +647,9 @@ onClick={() => { setTab(item.key); setSelectedUser(null); setSidebarOpen(false);
                           <option value="premium">Premium</option>
                         </select>
                       </div>
-                      <div><strong>KYC Status:</strong> 
-                        <select 
-                          className="form-select" 
+                      <div><strong>KYC Status:</strong>
+                        <select
+                          className="form-select"
                           style={{ marginLeft: 8, width: 'auto', display: 'inline-block', padding: '4px 8px' }}
                           defaultValue={userDetails.profile?.kyc_status}
                           onChange={(e) => handleUpdateKYC(selectedUser.id, e.target.value)}
@@ -582,12 +720,15 @@ onClick={() => { setTab(item.key); setSelectedUser(null); setSidebarOpen(false);
                             <td><span className={`tx-badge tx-badge-${inv.status === 'active' ? 'in' : 'out'}`}>{inv.status}</span></td>
                             <td style={{ color: inv.payment_status === 'paid' ? '#2E7D32' : '#C65D3B', fontWeight: 600 }}>{inv.payment_status}</td>
                             <td>{new Date(inv.created_at).toLocaleDateString()}</td>
-                            <td>
+                            <td style={{ display: 'flex', gap: 4 }}>
                               {inv.payment_status !== 'paid' && (
-                                <button className="btn btn-sm btn-gold" onClick={() => handleMarkAsPaid(inv.id)}>
-                                  Mark Paid
+                                <button className="btn btn-sm btn-gold" style={{ padding: '4px 8px', fontSize: 11 }} onClick={() => handleMarkAsPaid(inv.id)}>
+                                  Paid
                                 </button>
                               )}
+                              <button className="btn btn-sm btn-outline-dark" style={{ padding: '4px 8px', fontSize: 11 }} onClick={() => handleDeleteInvestment(inv.id)}>
+                                Del
+                              </button>
                             </td>
                           </tr>
                         ))}
@@ -610,6 +751,7 @@ onClick={() => { setTab(item.key); setSelectedUser(null); setSidebarOpen(false);
                           <th>Description</th>
                           <th>Status</th>
                           <th>Date</th>
+                          <th>Actions</th>
                         </tr>
                       </thead>
                       <tbody>
@@ -622,6 +764,11 @@ onClick={() => { setTab(item.key); setSelectedUser(null); setSidebarOpen(false);
                             <td>{tx.description}</td>
                             <td><span className={`tx-badge tx-badge-${tx.status === 'completed' ? 'in' : 'out'}`}>{tx.status}</span></td>
                             <td>{new Date(tx.created_at).toLocaleDateString()}</td>
+                            <td>
+                              <button className="btn btn-sm btn-outline-dark" style={{ padding: '4px 8px', fontSize: 11 }} onClick={() => handleDeleteTransaction(tx.id)}>
+                                Del
+                              </button>
+                            </td>
                           </tr>
                         ))}
                       </tbody>
@@ -644,6 +791,7 @@ onClick={() => { setTab(item.key); setSelectedUser(null); setSidebarOpen(false);
                           <th>Appreciation</th>
                           <th>Total</th>
                           <th>Paid</th>
+                          <th>Actions</th>
                         </tr>
                       </thead>
                       <tbody>
@@ -655,6 +803,11 @@ onClick={() => { setTab(item.key); setSelectedUser(null); setSidebarOpen(false);
                             <td style={{ color: '#2E7D32' }}>{fmtCurrency(e.appreciation)}</td>
                             <td style={{ fontWeight: 600 }}>{fmtCurrency((e.rental_income || 0) + (e.appreciation || 0))}</td>
                             <td>{e.paid_at ? new Date(e.paid_at).toLocaleDateString() : 'Pending'}</td>
+                            <td style={{ display: 'flex', gap: 4 }}>
+                              <button className="btn btn-sm btn-outline-dark" style={{ padding: '4px 8px', fontSize: 11 }} onClick={() => handleDeleteEarning(e.id)}>
+                                Del
+                              </button>
+                            </td>
                           </tr>
                         ))}
                       </tbody>
@@ -733,19 +886,19 @@ onClick={() => { setTab(item.key); setSelectedUser(null); setSidebarOpen(false);
                 <div className="dash-header">
                   <h2 className="display display-sm">Properties</h2>
                 </div>
-                
+
                 {/* Create Property Form */}
                 <div style={{ background: 'var(--white)', border: '1px solid var(--border-subtle)', padding: 24, marginBottom: 32 }}>
                   <h4 style={{ marginBottom: 16 }}>Add New Property</h4>
                   <form onSubmit={handleCreateProperty} style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 }}>
                     <input className="form-input" placeholder="Property Name" required
-                      value={propertyForm.name} onChange={e => setPropertyForm({...propertyForm, name: e.target.value})} />
+                      value={propertyForm.name} onChange={e => setPropertyForm({ ...propertyForm, name: e.target.value })} />
                     <input className="form-input" placeholder="Location" required
-                      value={propertyForm.location} onChange={e => setPropertyForm({...propertyForm, location: e.target.value})} />
+                      value={propertyForm.location} onChange={e => setPropertyForm({ ...propertyForm, location: e.target.value })} />
                     <input className="form-input" placeholder="Country" required
-                      value={propertyForm.country} onChange={e => setPropertyForm({...propertyForm, country: e.target.value})} />
+                      value={propertyForm.country} onChange={e => setPropertyForm({ ...propertyForm, country: e.target.value })} />
                     <select className="form-select" required
-                      value={propertyForm.type} onChange={e => setPropertyForm({...propertyForm, type: e.target.value})}>
+                      value={propertyForm.type} onChange={e => setPropertyForm({ ...propertyForm, type: e.target.value })}>
                       <option value="">Select Type</option>
                       <option value="apartment">Apartment</option>
                       <option value="house">House</option>
@@ -753,15 +906,15 @@ onClick={() => { setTab(item.key); setSelectedUser(null); setSidebarOpen(false);
                       <option value="condo">Condo</option>
                     </select>
                     <input className="form-input" type="number" step="0.01" placeholder="ROI %" required
-                      value={propertyForm.roi} onChange={e => setPropertyForm({...propertyForm, roi: e.target.value})} />
+                      value={propertyForm.roi} onChange={e => setPropertyForm({ ...propertyForm, roi: e.target.value })} />
                     <input className="form-input" type="number" placeholder="Min Investment" required
-                      value={propertyForm.min_investment} onChange={e => setPropertyForm({...propertyForm, min_investment: e.target.value})} />
+                      value={propertyForm.min_investment} onChange={e => setPropertyForm({ ...propertyForm, min_investment: e.target.value })} />
                     <input className="form-input" type="number" placeholder="Target Amount" required
-                      value={propertyForm.target_amount} onChange={e => setPropertyForm({...propertyForm, target_amount: e.target.value})} />
+                      value={propertyForm.target_amount} onChange={e => setPropertyForm({ ...propertyForm, target_amount: e.target.value })} />
                     <input className="form-input" type="number" step="0.01" placeholder="Rental Yield %"
-                      value={propertyForm.rental_yield} onChange={e => setPropertyForm({...propertyForm, rental_yield: e.target.value})} />
+                      value={propertyForm.rental_yield} onChange={e => setPropertyForm({ ...propertyForm, rental_yield: e.target.value })} />
                     <select className="form-select"
-                      value={propertyForm.status} onChange={e => setPropertyForm({...propertyForm, status: e.target.value})}>
+                      value={propertyForm.status} onChange={e => setPropertyForm({ ...propertyForm, status: e.target.value })}>
                       <option value="active">Active</option>
                       <option value="closing">Closing</option>
                       <option value="funded">Funded</option>
@@ -845,7 +998,7 @@ onClick={() => { setTab(item.key); setSelectedUser(null); setSidebarOpen(false);
                             {tx.type}
                           </span>
                         </td>
-                        <td style={{ 
+                        <td style={{
                           fontWeight: 600,
                           color: tx.amount > 0 ? '#2E7D32' : 'var(--charcoal)'
                         }}>
@@ -896,114 +1049,59 @@ onClick={() => { setTab(item.key); setSelectedUser(null); setSidebarOpen(false);
         )}
       </main>
 
-      {/* Edit User Modal */}
-      {editingUser && (
-        <div style={{
-          position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)', zIndex: 2000,
-          display: 'flex', alignItems: 'center', justifyContent: 'center'
-        }} onClick={() => setEditingUser(null)}>
-          <div style={{
-            background: 'var(--white)', padding: 32, maxWidth: 500, width: '90%',
-            borderRadius: 8
-          }} onClick={e => e.stopPropagation()}>
-            <h3 style={{ marginBottom: 24 }}>Edit User: {editingUser.first_name} {editingUser.last_name}</h3>
-            <div className="form-group">
-              <label className="form-label">Investor Level</label>
-              <select className="form-select" id="edit-level" defaultValue={editingUser.investor_level}>
-                <option value="new">New</option>
-                <option value="active">Active</option>
-                <option value="premium">Premium</option>
-              </select>
-            </div>
-            <div className="form-group">
-              <label className="form-label">KYC Status</label>
-              <select className="form-select" id="edit-kyc" defaultValue={editingUser.kyc_status}>
-                <option value="pending">Pending</option>
-                <option value="submitted">Submitted</option>
-                <option value="verified">Verified</option>
-                <option value="rejected">Rejected</option>
-              </select>
-            </div>
-            <div className="form-group">
-              <label className="form-label">Phone</label>
-              <input className="form-input" id="edit-phone" defaultValue={editingUser.phone || ''} />
-            </div>
-            <div className="form-group">
-              <label className="form-label">Bank Account</label>
-              <input className="form-input" id="edit-bank" defaultValue={editingUser.bank_account || ''} />
-            </div>
-            <div className="form-group">
-              <label className="form-label">Country</label>
-              <input className="form-input" id="edit-country" defaultValue={editingUser.country || ''} />
-            </div>
-            <div style={{ display: 'flex', gap: 12, marginTop: 24 }}>
-              <button className="btn btn-gold" onClick={() => {
-                handleUpdateUser(editingUser.id, {
-                  investor_level: document.getElementById('edit-level').value,
-                  kyc_status: document.getElementById('edit-kyc').value,
-                  phone: document.getElementById('edit-phone').value,
-                  bank_account: document.getElementById('edit-bank').value,
-                  country: document.getElementById('edit-country').value
-                });
-              }}>
-                Save Changes
-              </button>
-              <button className="btn btn-outline-dark" onClick={() => setEditingUser(null)}>Cancel</button>
-            </div>
-          </div>
-        </div>
-      )}
 
       {/* Add Funds/Earnings Modal */}
-      {fundsModal.show && (
-        <div style={{
-          position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)', zIndex: 2000,
-          display: 'flex', alignItems: 'center', justifyContent: 'center'
-        }} onClick={() => setFundsModal({ show: false, type: '', userId: null })}>
+      {
+        fundsModal.show && (
           <div style={{
-            background: 'var(--white)', padding: 32, maxWidth: 400, width: '90%',
-            borderRadius: 8
-          }} onClick={e => e.stopPropagation()}>
-            <h3 style={{ marginBottom: 24 }}>
-              {fundsModal.type === 'earning' ? 'Add Earning' : fundsModal.type === 'credit' ? 'Add Funds' : 'Deduct Funds'}
-            </h3>
-            
-            <div className="form-group">
-              <label className="form-label">Amount ($)</label>
-              <input className="form-input" id="fund-amount" type="number" step="0.01" placeholder="0.00" />
-            </div>
-            
-            {fundsModal.type === 'earning' ? (
-              <>
-                <div className="form-group">
-                  <label className="form-label">Earning Type</label>
-                  <select className="form-select" id="earning-type">
-                    <option value="rental">Rental Income</option>
-                    <option value="appreciation">Appreciation</option>
-                  </select>
-                </div>
-                <div className="form-group">
-                  <label className="form-label">Period (YYYY-MM)</label>
-                  <input className="form-input" id="earning-period" type="text" placeholder="2024-01" />
-                </div>
-              </>
-            ) : (
+            position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)', zIndex: 2000,
+            display: 'flex', alignItems: 'center', justifyContent: 'center'
+          }} onClick={() => setFundsModal({ show: false, type: '', userId: null })}>
+            <div style={{
+              background: 'var(--white)', padding: 32, maxWidth: 400, width: '90%',
+              borderRadius: 8
+            }} onClick={e => e.stopPropagation()}>
+              <h3 style={{ marginBottom: 24 }}>
+                {fundsModal.type === 'earning' ? 'Add Earning' : fundsModal.type === 'credit' ? 'Add Funds' : 'Deduct Funds'}
+              </h3>
+
               <div className="form-group">
-                <label className="form-label">Description</label>
-                <input className="form-input" id="fund-desc" placeholder="Reason for funds" />
+                <label className="form-label">Amount ($)</label>
+                <input className="form-input" id="fund-amount" type="number" step="0.01" placeholder="0.00" />
               </div>
-            )}
-            
-            <div style={{ display: 'flex', gap: 12, marginTop: 24 }}>
-              <button className="btn btn-gold" onClick={handleAddFunds}>
-                {fundsModal.type === 'earning' ? 'Add Earning' : 'Add Funds'}
-              </button>
-              <button className="btn btn-outline-dark" onClick={() => setFundsModal({ show: false, type: '', userId: null })}>Cancel</button>
+
+              {fundsModal.type === 'earning' ? (
+                <>
+                  <div className="form-group">
+                    <label className="form-label">Earning Type</label>
+                    <select className="form-select" id="earning-type">
+                      <option value="rental">Rental Income</option>
+                      <option value="appreciation">Appreciation</option>
+                    </select>
+                  </div>
+                  <div className="form-group">
+                    <label className="form-label">Period (YYYY-MM)</label>
+                    <input className="form-input" id="earning-period" type="text" placeholder="2024-01" />
+                  </div>
+                </>
+              ) : (
+                <div className="form-group">
+                  <label className="form-label">Description</label>
+                  <input className="form-input" id="fund-desc" placeholder="Reason for funds" />
+                </div>
+              )}
+
+              <div style={{ display: 'flex', gap: 12, marginTop: 24 }}>
+                <button className="btn btn-gold" onClick={handleAddFunds}>
+                  {fundsModal.type === 'earning' ? 'Add Earning' : 'Add Funds'}
+                </button>
+                <button className="btn btn-outline-dark" onClick={() => setFundsModal({ show: false, type: '', userId: null })}>Cancel</button>
+              </div>
             </div>
           </div>
-        </div>
-      )}
-    </div>
+        )
+      }
+    </div >
   );
 }
 
